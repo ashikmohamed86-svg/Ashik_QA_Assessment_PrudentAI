@@ -7,7 +7,7 @@ Automated API test suite built with **PyTest** to validate key behaviours of the
 ## Project Structure
 
 ```
-Assignment/
+Ashik_QA_Assessment_PrudentAI/
 ├── api_client/               # API client layer
 │   ├── base_client.py        # Session, auth, HTTP helpers
 │   ├── customers.py          # /customers resource

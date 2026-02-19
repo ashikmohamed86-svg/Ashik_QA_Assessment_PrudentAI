@@ -1,15 +1,18 @@
 """Tests for Stripe Customers API – CRUD, schema, and field validation."""
 
+import allure
 import pytest
 
 from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA
-from utils.validators import validate_schema, is_valid_email, is_valid_phone
+from utils.validators import validate_schema, is_valid_email, is_valid_phone, assert_response_time
 from utils.test_data import VALID_CUSTOMER, CUSTOMER_MINIMAL
 
 
 # ─────────────────────────────────────────────────────────────────────
 #  Create Customer
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Create Customer")
 @pytest.mark.smoke
 @pytest.mark.customers
 class TestCreateCustomer:
@@ -21,6 +24,7 @@ class TestCreateCustomer:
         body = resp.json()
 
         assert resp.status_code == 200
+        assert_response_time(resp)
         assert body["id"].startswith("cus_")
         assert body["name"] == VALID_CUSTOMER["name"]
         assert body["email"] == VALID_CUSTOMER["email"]
@@ -85,6 +89,8 @@ class TestCreateCustomer:
 # ─────────────────────────────────────────────────────────────────────
 #  Fetch Customer Details
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Fetch Customer")
 @pytest.mark.customers
 class TestFetchCustomer:
 
@@ -115,6 +121,8 @@ class TestFetchCustomer:
 # ─────────────────────────────────────────────────────────────────────
 #  List / Update / Delete
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Customer Operations")
 @pytest.mark.customers
 class TestCustomerOperations:
 

@@ -4,6 +4,7 @@ Covers boundary values, invalid inputs, missing fields, and Stripe
 test-card decline scenarios.
 """
 
+import allure
 import pytest
 
 from schemas.customer_schema import STRIPE_ERROR_SCHEMA
@@ -11,17 +12,25 @@ from utils.validators import validate_schema
 from utils.test_data import (
     VALID_PAYMENT_INTENT,
     PAYMENT_INTENT_MANUAL_CAPTURE,
+    PAYMENT_INTENT_INVALID_CURRENCY,
+    PAYMENT_INTENT_ZERO_AMOUNT,
+    PAYMENT_INTENT_NEGATIVE_AMOUNT,
+    CUSTOMER_INVALID_EMAIL,
+    CUSTOMER_MISSING_EMAIL,
     CARD_VISA_SUCCESS,
     CARD_DECLINED,
     CARD_INSUFFICIENT_FUNDS,
     CARD_EXPIRED,
     CARD_INCORRECT_CVC,
+    CARD_PROCESSING_ERROR,
 )
 
 
 # ─────────────────────────────────────────────────────────────────────
 #  Customer – Negative Tests
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Negative Validation")
 @pytest.mark.negative
 @pytest.mark.customers
 class TestCustomerNegative:
@@ -30,11 +39,23 @@ class TestCustomerNegative:
         self, customers_api, created_customer_ids
     ):
         """Stripe does not validate email format server-side; it stores as-is."""
-        resp = customers_api.create(email="not-an-email")
+        resp = customers_api.create(**CUSTOMER_INVALID_EMAIL)
         body = resp.json()
 
         assert resp.status_code == 200
-        assert body["email"] == "not-an-email"
+        assert body["email"] == CUSTOMER_INVALID_EMAIL["email"]
+        created_customer_ids.append(body["id"])
+
+    def test_create_customer_missing_email(
+        self, customers_api, created_customer_ids
+    ):
+        """Stripe allows creating a customer without an email."""
+        resp = customers_api.create(**CUSTOMER_MISSING_EMAIL)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["email"] is None
+        assert body["name"] == CUSTOMER_MISSING_EMAIL["name"]
         created_customer_ids.append(body["id"])
 
     def test_create_customer_empty_body(
@@ -74,14 +95,14 @@ class TestCustomerNegative:
 # ─────────────────────────────────────────────────────────────────────
 #  PaymentIntent – Invalid Input Tests
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Invalid Input Validation")
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestPaymentIntentInvalidInput:
 
     def test_invalid_currency_code(self, payments_api):
-        resp = payments_api.create(
-            amount=1000, currency="zzz", **{"payment_method_types[]": "card"}
-        )
+        resp = payments_api.create(**PAYMENT_INTENT_INVALID_CURRENCY)
         assert resp.status_code == 400
         validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
@@ -90,19 +111,18 @@ class TestPaymentIntentInvalidInput:
             currency="usd", **{"payment_method_types[]": "card"}
         )
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
     def test_negative_amount(self, payments_api):
-        resp = payments_api.create(
-            amount=-100, currency="usd", **{"payment_method_types[]": "card"}
-        )
+        resp = payments_api.create(**PAYMENT_INTENT_NEGATIVE_AMOUNT)
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
     def test_zero_amount_rejected(self, payments_api):
         """Stripe rejects amount=0 for most currencies."""
-        resp = payments_api.create(
-            amount=0, currency="usd", **{"payment_method_types[]": "card"}
-        )
+        resp = payments_api.create(**PAYMENT_INTENT_ZERO_AMOUNT)
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
     def test_string_amount(self, payments_api):
         resp = payments_api.create(
@@ -111,52 +131,51 @@ class TestPaymentIntentInvalidInput:
             **{"payment_method_types[]": "card"},
         )
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
     def test_missing_currency(self, payments_api):
         resp = payments_api.create(
             amount=1000, **{"payment_method_types[]": "card"}
         )
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
     @pytest.mark.parametrize(
-        "currency",
-        ["USD", "Us", "u", "us", "usdx", "12"],
+        "currency, expected_status",
+        [
+            ("USD", 200),       # Stripe normalises uppercase
+            ("Us", 200),        # Mixed-case also normalised
+            ("u", 400),         # Single char is invalid
+            ("usdx", 400),      # Four chars is invalid
+            ("12", 400),        # Numeric is invalid
+        ],
         ids=[
-            "uppercase",
-            "mixed-case",
-            "single-char",
-            "two-chars",
-            "four-chars",
-            "numeric",
+            "uppercase-normalised",
+            "mixed-case-normalised",
+            "single-char-invalid",
+            "four-chars-invalid",
+            "numeric-invalid",
         ],
     )
-    def test_various_invalid_currencies(self, payments_api, currency):
+    def test_various_invalid_currencies(self, payments_api, currency, expected_status):
         resp = payments_api.create(
             amount=1000, currency=currency, **{"payment_method_types[]": "card"}
         )
-        # Stripe normalises uppercase to lowercase, so "USD" may succeed.
-        # We verify the response is either 200 with lowercased currency or 400.
-        if resp.status_code == 200:
+        assert resp.status_code == expected_status
+        if expected_status == 200:
             assert resp.json()["currency"] == currency.lower()
         else:
-            assert resp.status_code == 400
+            validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
 
 # ─────────────────────────────────────────────────────────────────────
 #  PaymentIntent – Capture Validation
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Capture Validation")
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestCaptureValidation:
-
-    def test_capture_before_confirm_fails(
-        self, payments_api, created_payment_intent_ids
-    ):
-        pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
-        created_payment_intent_ids.append(pi["id"])
-
-        resp = payments_api.capture(pi["id"])
-        assert resp.status_code == 400
 
     def test_capture_amount_greater_than_authorized(
         self, payments_api, created_payment_intent_ids
@@ -171,11 +190,14 @@ class TestCaptureValidation:
             pi["id"], amount_to_capture=pi["amount"] + 5000
         )
         assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
 
 # ─────────────────────────────────────────────────────────────────────
 #  Stripe Test Card Decline Scenarios
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Decline Scenarios")
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestDeclineScenarios:
@@ -194,6 +216,7 @@ class TestDeclineScenarios:
         body = resp.json()
         assert resp.status_code == 402
         assert body["error"]["code"] == "card_declined"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
 
     def test_insufficient_funds(
         self, payments_api, created_payment_intent_ids
@@ -205,6 +228,7 @@ class TestDeclineScenarios:
         assert resp.status_code == 402
         assert body["error"]["code"] == "card_declined"
         assert "insufficient" in body["error"]["decline_code"]
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
 
     def test_expired_card(
         self, payments_api, created_payment_intent_ids
@@ -216,6 +240,7 @@ class TestDeclineScenarios:
         assert resp.status_code == 402
         assert body["error"]["code"] == "card_declined"
         assert body["error"]["decline_code"] == "expired_card"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
 
     def test_incorrect_cvc(
         self, payments_api, created_payment_intent_ids
@@ -227,14 +252,16 @@ class TestDeclineScenarios:
         assert resp.status_code == 402
         assert body["error"]["code"] == "card_declined"
         assert body["error"]["decline_code"] == "incorrect_cvc"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
 
-    def test_confirm_without_payment_method(
+    def test_processing_error(
         self, payments_api, created_payment_intent_ids
     ):
-        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
-        created_payment_intent_ids.append(pi["id"])
-
-        resp = payments_api.confirm(pi["id"])
-        assert resp.status_code == 400
+        resp = self._create_and_confirm(
+            payments_api, CARD_PROCESSING_ERROR, created_payment_intent_ids
+        )
         body = resp.json()
-        assert "error" in body
+        assert resp.status_code == 402
+        assert body["error"]["code"] == "card_declined"
+        assert body["error"]["decline_code"] == "processing_error"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)

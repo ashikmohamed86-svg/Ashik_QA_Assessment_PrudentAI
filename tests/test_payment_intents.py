@@ -1,12 +1,13 @@
 """Tests for Stripe PaymentIntents API – create, confirm, capture, fetch."""
 
+import allure
 import pytest
 
 from schemas.payment_intent_schema import (
     PAYMENT_INTENT_SCHEMA,
     PAYMENT_INTENT_CONFIRM_SCHEMA,
 )
-from utils.validators import validate_schema, is_valid_iso_currency
+from utils.validators import validate_schema, is_valid_iso_currency, assert_response_time
 from utils.test_data import (
     VALID_PAYMENT_INTENT,
     PAYMENT_INTENT_WITH_RECEIPT,
@@ -18,6 +19,8 @@ from utils.test_data import (
 # ─────────────────────────────────────────────────────────────────────
 #  Create PaymentIntent
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Create PaymentIntent")
 @pytest.mark.smoke
 @pytest.mark.payment_intents
 class TestCreatePaymentIntent:
@@ -29,6 +32,7 @@ class TestCreatePaymentIntent:
         body = resp.json()
 
         assert resp.status_code == 200
+        assert_response_time(resp)
         assert body["id"].startswith("pi_")
         assert body["amount"] == VALID_PAYMENT_INTENT["amount"]
         assert body["status"] in (
@@ -96,6 +100,8 @@ class TestCreatePaymentIntent:
 # ─────────────────────────────────────────────────────────────────────
 #  Confirm PaymentIntent
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Confirm PaymentIntent")
 @pytest.mark.payment_intents
 class TestConfirmPaymentIntent:
 
@@ -141,6 +147,8 @@ class TestConfirmPaymentIntent:
 # ─────────────────────────────────────────────────────────────────────
 #  Capture PaymentIntent (manual capture flow)
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Capture PaymentIntent")
 @pytest.mark.payment_intents
 class TestCapturePaymentIntent:
 
@@ -187,6 +195,8 @@ class TestCapturePaymentIntent:
 # ─────────────────────────────────────────────────────────────────────
 #  Fetch PaymentIntent Details
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Fetch PaymentIntent")
 @pytest.mark.payment_intents
 class TestFetchPaymentIntent:
 
@@ -249,6 +259,8 @@ class TestFetchPaymentIntent:
 # ─────────────────────────────────────────────────────────────────────
 #  End-to-End Payment Flow
 # ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("End-to-End Payment Flow")
 @pytest.mark.e2e
 @pytest.mark.payment_intents
 class TestEndToEndPaymentFlow:

@@ -24,14 +24,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Create reports directory
+        run: mkdir -p reports
+
       - name: Run tests
         env:
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
         run: pytest --tb=short -v --html=reports/report.html --self-contained-html
 
-      - name: Upload test report
+      - name: Upload HTML test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-report
           path: reports/report.html
+
+      - name: Upload Allure results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results
+          path: reports/allure-results/

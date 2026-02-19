@@ -23,3 +23,11 @@ def is_valid_phone(phone: str) -> bool:
 
 def is_valid_iso_currency(code: str) -> bool:
     return bool(re.match(r"^[a-z]{3}$", code))
+
+
+def assert_response_time(response, max_seconds: float = 5.0) -> None:
+    """Assert that the response was received within the given time limit."""
+    elapsed = response.elapsed.total_seconds()
+    assert elapsed <= max_seconds, (
+        f"Response took {elapsed:.2f}s, exceeding {max_seconds}s limit"
+    )
