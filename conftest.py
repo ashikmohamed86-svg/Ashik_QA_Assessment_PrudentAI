@@ -1,5 +1,7 @@
 import logging
 import os
+import platform
+import subprocess
 import sys
 
 import pytest
@@ -67,3 +69,22 @@ def cleanup_payment_intents(payments_api, created_payment_intent_ids):
                 payments_api.cancel(pid)
         except Exception as exc:
             logger.warning("Failed to cancel payment intent %s: %s", pid, exc)
+
+
+# ── Auto-open HTML report after test session ─────────────────────
+def pytest_sessionfinish(session, exitstatus):
+    """Open the HTML report in the default browser after tests complete."""
+    report_path = os.path.abspath("reports/report.html")
+    if not os.path.exists(report_path):
+        return
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", report_path])
+        elif system == "Windows":
+            os.startfile(report_path)
+        else:
+            subprocess.Popen(["xdg-open", report_path])
+    except Exception:
+        pass  # silently skip if browser can't be opened (e.g. CI)
