@@ -31,3 +31,13 @@ def assert_response_time(response, max_seconds: float = 5.0) -> None:
     assert elapsed <= max_seconds, (
         f"Response took {elapsed:.2f}s, exceeding {max_seconds}s limit"
     )
+
+
+def assert_response_headers(response) -> None:
+    """Validate standard Stripe response headers for security and traceability."""
+    assert "application/json" in response.headers.get("Content-Type", ""), (
+        f"Expected JSON Content-Type, got: {response.headers.get('Content-Type')}"
+    )
+    assert response.headers.get("Request-Id"), (
+        "Missing Request-Id header — required for Stripe request traceability"
+    )

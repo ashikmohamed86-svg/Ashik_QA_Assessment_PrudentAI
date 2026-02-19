@@ -4,3 +4,5 @@ pytest-html>=4.1.0
 jsonschema>=4.21.0
 python-dotenv>=1.0.0
 allure-pytest>=2.13.0
+pytest-rerunfailures>=14.0.0
+pytest-xdist>=3.5.0

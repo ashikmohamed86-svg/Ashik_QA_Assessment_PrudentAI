@@ -4,7 +4,10 @@ import allure
 import pytest
 
 from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA
-from utils.validators import validate_schema, is_valid_email, is_valid_phone, assert_response_time
+from utils.validators import (
+    validate_schema, is_valid_email, is_valid_phone,
+    assert_response_time, assert_response_headers,
+)
 from utils.test_data import VALID_CUSTOMER, CUSTOMER_MINIMAL
 
 
@@ -13,43 +16,52 @@ from utils.test_data import VALID_CUSTOMER, CUSTOMER_MINIMAL
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("Customers API")
 @allure.story("Create Customer")
+@allure.severity(allure.severity_level.CRITICAL)
 @pytest.mark.smoke
 @pytest.mark.customers
 class TestCreateCustomer:
 
+    @allure.description("Verify that a customer with name, email, phone is created and all fields echo back correctly.")
     def test_create_customer_with_all_fields(
         self, customers_api, created_customer_ids
     ):
-        resp = customers_api.create(**VALID_CUSTOMER)
-        body = resp.json()
+        with allure.step("Send POST /customers with all fields"):
+            resp = customers_api.create(**VALID_CUSTOMER)
+            body = resp.json()
 
-        assert resp.status_code == 200
-        assert_response_time(resp)
-        assert body["id"].startswith("cus_")
-        assert body["name"] == VALID_CUSTOMER["name"]
-        assert body["email"] == VALID_CUSTOMER["email"]
-        assert body["phone"] == VALID_CUSTOMER["phone"]
-        validate_schema(body, CUSTOMER_SCHEMA)
+        with allure.step("Validate status, ID prefix, and field values"):
+            assert resp.status_code == 200
+            assert_response_time(resp)
+            assert_response_headers(resp)
+            assert body["id"].startswith("cus_")
+            assert body["name"] == VALID_CUSTOMER["name"]
+            assert body["email"] == VALID_CUSTOMER["email"]
+            assert body["phone"] == VALID_CUSTOMER["phone"]
+
+        with allure.step("Validate response schema"):
+            validate_schema(body, CUSTOMER_SCHEMA)
 
         created_customer_ids.append(body["id"])
 
     def test_create_customer_minimal(
         self, customers_api, created_customer_ids
     ):
-        resp = customers_api.create(**CUSTOMER_MINIMAL)
-        body = resp.json()
+        with allure.step("Create customer with email only"):
+            resp = customers_api.create(**CUSTOMER_MINIMAL)
+            body = resp.json()
 
-        assert resp.status_code == 200
-        assert body["id"].startswith("cus_")
-        assert body["email"] == CUSTOMER_MINIMAL["email"]
-        validate_schema(body, CUSTOMER_SCHEMA)
+        with allure.step("Verify minimal customer created"):
+            assert resp.status_code == 200
+            assert body["id"].startswith("cus_")
+            assert body["email"] == CUSTOMER_MINIMAL["email"]
+            validate_schema(body, CUSTOMER_SCHEMA)
 
         created_customer_ids.append(body["id"])
 
+    @allure.description("Email is optional in Stripe; customer should still be created with email=null.")
     def test_create_customer_without_email(
         self, customers_api, created_customer_ids
     ):
-        """Email is optional in Stripe; customer should still be created."""
         resp = customers_api.create(name="No Email", phone="+14155550000")
         body = resp.json()
 
@@ -91,6 +103,7 @@ class TestCreateCustomer:
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("Customers API")
 @allure.story("Fetch Customer")
+@allure.severity(allure.severity_level.NORMAL)
 @pytest.mark.customers
 class TestFetchCustomer:
 
@@ -101,13 +114,16 @@ class TestFetchCustomer:
         created_customer_ids.append(self.customer["id"])
 
     def test_fetch_existing_customer(self, customers_api):
-        resp = customers_api.retrieve(self.customer["id"])
-        body = resp.json()
+        with allure.step(f"Fetch customer {self.customer['id']}"):
+            resp = customers_api.retrieve(self.customer["id"])
+            body = resp.json()
 
-        assert resp.status_code == 200
-        assert body["id"] == self.customer["id"]
-        assert body["email"] == VALID_CUSTOMER["email"]
-        validate_schema(body, CUSTOMER_SCHEMA)
+        with allure.step("Verify correct details returned"):
+            assert resp.status_code == 200
+            assert_response_headers(resp)
+            assert body["id"] == self.customer["id"]
+            assert body["email"] == VALID_CUSTOMER["email"]
+            validate_schema(body, CUSTOMER_SCHEMA)
 
     def test_fetch_non_existing_customer(self, customers_api):
         resp = customers_api.retrieve("cus_nonexistent000000000")
@@ -123,6 +139,7 @@ class TestFetchCustomer:
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("Customers API")
 @allure.story("Customer Operations")
+@allure.severity(allure.severity_level.NORMAL)
 @pytest.mark.customers
 class TestCustomerOperations:
 
@@ -135,16 +152,19 @@ class TestCustomerOperations:
         assert len(body["data"]) <= 3
 
     def test_update_customer(self, customers_api, created_customer_ids):
-        create_resp = customers_api.create(**VALID_CUSTOMER)
-        cid = create_resp.json()["id"]
-        created_customer_ids.append(cid)
+        with allure.step("Create a customer to update"):
+            create_resp = customers_api.create(**VALID_CUSTOMER)
+            cid = create_resp.json()["id"]
+            created_customer_ids.append(cid)
 
-        update_resp = customers_api.update(cid, name="Updated Name")
-        body = update_resp.json()
+        with allure.step("Update customer name"):
+            update_resp = customers_api.update(cid, name="Updated Name")
+            body = update_resp.json()
 
-        assert update_resp.status_code == 200
-        assert body["name"] == "Updated Name"
-        assert body["email"] == VALID_CUSTOMER["email"]
+        with allure.step("Verify name changed, other fields unchanged"):
+            assert update_resp.status_code == 200
+            assert body["name"] == "Updated Name"
+            assert body["email"] == VALID_CUSTOMER["email"]
 
     def test_delete_customer(self, customers_api):
         create_resp = customers_api.create(email="delete_me@example.com")
@@ -156,3 +176,94 @@ class TestCustomerOperations:
         assert del_resp.status_code == 200
         assert body["deleted"] is True
         assert body["id"] == cid
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Pagination
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Pagination")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerPagination:
+
+    @allure.description("Verify that the limit parameter restricts the number of results returned.")
+    def test_limit_returns_correct_count(self, customers_api):
+        resp = customers_api.list_customers(limit=1)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["data"]) == 1
+
+    @allure.description("Fetch page 1, then page 2 using the starting_after cursor to verify pagination works.")
+    def test_paginate_with_starting_after(self, customers_api):
+        with allure.step("Fetch first page"):
+            page1 = customers_api.list_customers(limit=1).json()
+            assert len(page1["data"]) == 1
+
+        with allure.step("Fetch second page using cursor"):
+            last_id = page1["data"][-1]["id"]
+            page2 = customers_api.list_customers(limit=1, starting_after=last_id).json()
+
+        with allure.step("Verify different customer returned"):
+            assert page2["data"][0]["id"] != last_id
+
+    def test_has_more_flag(self, customers_api):
+        """With limit=1, has_more should be True if more than 1 customer exists."""
+        resp = customers_api.list_customers(limit=1).json()
+        assert isinstance(resp["has_more"], bool)
+        assert resp["has_more"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Metadata CRUD
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Metadata")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerMetadata:
+
+    @allure.description("Stripe metadata is a key-value store; verify it persists on creation.")
+    def test_create_customer_with_metadata(
+        self, customers_api, created_customer_ids
+    ):
+        resp = customers_api.create(
+            email="meta@example.com",
+            **{"metadata[env]": "test", "metadata[source]": "automation"},
+        )
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["metadata"]["env"] == "test"
+        assert body["metadata"]["source"] == "automation"
+        created_customer_ids.append(body["id"])
+
+    def test_update_metadata(self, customers_api, created_customer_ids):
+        with allure.step("Create customer with metadata version=1"):
+            cust = customers_api.create(
+                email="meta_update@example.com",
+                **{"metadata[version]": "1"},
+            ).json()
+            created_customer_ids.append(cust["id"])
+
+        with allure.step("Update metadata version to 2"):
+            updated = customers_api.update(
+                cust["id"], **{"metadata[version]": "2"}
+            ).json()
+
+        with allure.step("Verify metadata updated"):
+            assert updated["metadata"]["version"] == "2"
+
+    def test_clear_metadata(self, customers_api, created_customer_ids):
+        cust = customers_api.create(
+            email="meta_clear@example.com",
+            **{"metadata[key]": "value"},
+        ).json()
+        created_customer_ids.append(cust["id"])
+
+        cleared = customers_api.update(
+            cust["id"], **{"metadata[key]": ""}
+        ).json()
+
+        assert cleared["metadata"].get("key", "") == ""

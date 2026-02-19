@@ -31,14 +31,15 @@ from utils.test_data import (
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("Customers API")
 @allure.story("Negative Validation")
+@allure.severity(allure.severity_level.NORMAL)
 @pytest.mark.negative
 @pytest.mark.customers
 class TestCustomerNegative:
 
+    @allure.description("Stripe rejects invalid email formats; verify 400 response with error schema.")
     def test_create_customer_invalid_email_rejected(
         self, customers_api, created_customer_ids
     ):
-        """Stripe rejects invalid email formats with a 400 error."""
         resp = customers_api.create(**CUSTOMER_INVALID_EMAIL)
         body = resp.json()
 
@@ -49,10 +50,10 @@ class TestCustomerNegative:
             assert body["email"] == CUSTOMER_INVALID_EMAIL["email"]
             created_customer_ids.append(body["id"])
 
+    @allure.description("Stripe allows creating a customer without an email — email is optional.")
     def test_create_customer_missing_email(
         self, customers_api, created_customer_ids
     ):
-        """Stripe allows creating a customer without an email."""
         resp = customers_api.create(**CUSTOMER_MISSING_EMAIL)
         body = resp.json()
 
@@ -72,6 +73,7 @@ class TestCustomerNegative:
         assert body["id"].startswith("cus_")
         created_customer_ids.append(body["id"])
 
+    @allure.description("Boundary test: extremely long name (5000 chars) may be accepted or rejected.")
     def test_create_customer_extremely_long_name(
         self, customers_api, created_customer_ids
     ):
@@ -89,13 +91,15 @@ class TestCustomerNegative:
     def test_retrieve_deleted_customer(
         self, customers_api
     ):
-        create_resp = customers_api.create(email="tobedeleted@test.com")
-        cid = create_resp.json()["id"]
-        customers_api.delete_customer(cid)
+        with allure.step("Create and delete a customer"):
+            create_resp = customers_api.create(email="tobedeleted@test.com")
+            cid = create_resp.json()["id"]
+            customers_api.delete_customer(cid)
 
-        resp = customers_api.retrieve(cid)
-        body = resp.json()
-        assert body.get("deleted") is True
+        with allure.step("Retrieve deleted customer and verify deleted flag"):
+            resp = customers_api.retrieve(cid)
+            body = resp.json()
+            assert body.get("deleted") is True
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ class TestCustomerNegative:
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("PaymentIntents API")
 @allure.story("Invalid Input Validation")
+@allure.severity(allure.severity_level.NORMAL)
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestPaymentIntentInvalidInput:
@@ -181,24 +186,28 @@ class TestPaymentIntentInvalidInput:
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("PaymentIntents API")
 @allure.story("Capture Validation")
+@allure.severity(allure.severity_level.NORMAL)
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestCaptureValidation:
 
+    @allure.description("Attempt to capture more than the authorized amount — should return 400.")
     def test_capture_amount_greater_than_authorized(
         self, payments_api, created_payment_intent_ids
     ):
-        """Attempt to capture more than the authorized amount."""
-        pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
-        created_payment_intent_ids.append(pi["id"])
+        with allure.step("Create and confirm manual-capture PaymentIntent"):
+            pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
 
-        payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+        with allure.step("Attempt capture with amount exceeding authorization"):
+            resp = payments_api.capture(
+                pi["id"], amount_to_capture=pi["amount"] + 5000
+            )
 
-        resp = payments_api.capture(
-            pi["id"], amount_to_capture=pi["amount"] + 5000
-        )
-        assert resp.status_code == 400
-        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+        with allure.step("Verify 400 and error schema"):
+            assert resp.status_code == 400
+            validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -206,6 +215,7 @@ class TestCaptureValidation:
 # ─────────────────────────────────────────────────────────────────────
 @allure.feature("PaymentIntents API")
 @allure.story("Decline Scenarios")
+@allure.severity(allure.severity_level.CRITICAL)
 @pytest.mark.negative
 @pytest.mark.payment_intents
 class TestDeclineScenarios:
@@ -215,6 +225,7 @@ class TestDeclineScenarios:
         ids_list.append(pi["id"])
         return payments_api.confirm(pi["id"], payment_method=card)
 
+    @allure.description("Generic card decline using pm_card_chargeDeclined test token.")
     def test_card_declined(
         self, payments_api, created_payment_intent_ids
     ):

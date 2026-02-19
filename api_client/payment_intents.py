@@ -10,8 +10,9 @@ class PaymentIntentsAPI(BaseAPIClient):
 
     RESOURCE = "payment_intents"
 
-    def create(self, **fields: Any) -> requests.Response:
-        return self.post(self.RESOURCE, data=fields)
+    def create(self, idempotency_key: str | None = None, **fields: Any) -> requests.Response:
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        return self.post(self.RESOURCE, data=fields, headers=headers)
 
     def retrieve(self, intent_id: str) -> requests.Response:
         return self.get(f"{self.RESOURCE}/{intent_id}")
