@@ -3,7 +3,7 @@
 import allure
 import pytest
 
-from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA
+from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA, STRIPE_ERROR_SCHEMA
 from utils.validators import (
     validate_schema, is_valid_email, is_valid_phone,
     assert_response_time, assert_response_headers,
@@ -151,7 +151,7 @@ class TestCustomerOperations:
         validate_schema(body, CUSTOMER_LIST_SCHEMA)
         assert len(body["data"]) <= 3
 
-    def test_update_customer(self, customers_api, created_customer_ids):
+    def test_update_customer_name(self, customers_api, created_customer_ids):
         with allure.step("Create a customer to update"):
             create_resp = customers_api.create(**VALID_CUSTOMER)
             cid = create_resp.json()["id"]
@@ -165,6 +165,24 @@ class TestCustomerOperations:
             assert update_resp.status_code == 200
             assert body["name"] == "Updated Name"
             assert body["email"] == VALID_CUSTOMER["email"]
+
+    def test_update_customer_email(self, customers_api, created_customer_ids):
+        cust = customers_api.create(**VALID_CUSTOMER).json()
+        created_customer_ids.append(cust["id"])
+
+        updated = customers_api.update(cust["id"], email="updated@example.com").json()
+
+        assert updated["email"] == "updated@example.com"
+        assert updated["name"] == VALID_CUSTOMER["name"]
+
+    @allure.description("Verify the description field is stored and returned correctly.")
+    def test_create_customer_with_description(self, customers_api, created_customer_ids):
+        resp = customers_api.create(**VALID_CUSTOMER)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["description"] == VALID_CUSTOMER["description"]
+        created_customer_ids.append(body["id"])
 
     def test_delete_customer(self, customers_api):
         create_resp = customers_api.create(email="delete_me@example.com")
@@ -267,3 +285,114 @@ class TestCustomerMetadata:
         ).json()
 
         assert cleared["metadata"].get("key", "") == ""
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Negative – Customer Error Scenarios
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Negative Error Scenarios")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.negative
+@pytest.mark.customers
+class TestCustomerNegativeErrors:
+
+    def test_delete_non_existing_customer(self, customers_api):
+        resp = customers_api.delete_customer("cus_nonexistent000000000")
+        assert resp.status_code == 404
+
+    def test_double_delete_customer(self, customers_api):
+        """Deleting an already-deleted customer should return an error."""
+        cust = customers_api.create(email="double_del@example.com").json()
+        customers_api.delete_customer(cust["id"])
+
+        resp = customers_api.delete_customer(cust["id"])
+        assert resp.status_code == 404
+
+    def test_update_non_existing_customer(self, customers_api):
+        resp = customers_api.update("cus_nonexistent000000000", name="Ghost")
+        assert resp.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Performance – Customer Response Times
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Performance")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerPerformance:
+
+    def test_create_response_time(self, customers_api, created_customer_ids):
+        resp = customers_api.create(**VALID_CUSTOMER)
+        assert_response_time(resp, max_seconds=5.0)
+        created_customer_ids.append(resp.json()["id"])
+
+    def test_fetch_response_time(self, customers_api, created_customer_ids):
+        cust = customers_api.create(**VALID_CUSTOMER).json()
+        created_customer_ids.append(cust["id"])
+
+        resp = customers_api.retrieve(cust["id"])
+        assert_response_time(resp, max_seconds=5.0)
+
+    def test_list_response_time(self, customers_api):
+        resp = customers_api.list_customers(limit=10)
+        assert_response_time(resp, max_seconds=5.0)
+
+    def test_update_response_time(self, customers_api, created_customer_ids):
+        cust = customers_api.create(**VALID_CUSTOMER).json()
+        created_customer_ids.append(cust["id"])
+
+        resp = customers_api.update(cust["id"], name="Perf Test")
+        assert_response_time(resp, max_seconds=5.0)
+
+    def test_delete_response_time(self, customers_api):
+        cust = customers_api.create(email="perf_del@example.com").json()
+
+        resp = customers_api.delete_customer(cust["id"])
+        assert_response_time(resp, max_seconds=5.0)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Boundary / Limit – Customer Fields
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Boundary & Limit")
+@allure.severity(allure.severity_level.MINOR)
+@pytest.mark.negative
+@pytest.mark.customers
+class TestCustomerBoundary:
+
+    @allure.description("Verify special characters (unicode, emojis) in customer name are handled.")
+    def test_special_characters_in_name(self, customers_api, created_customer_ids):
+        resp = customers_api.create(name="Tester Mller", email="unicode@example.com")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert "Mller" in body["name"]
+        created_customer_ids.append(body["id"])
+
+    def test_empty_string_name(self, customers_api, created_customer_ids):
+        """Empty string name should be accepted — Stripe stores it as empty."""
+        resp = customers_api.create(name="", email="empty_name@example.com")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        created_customer_ids.append(body["id"])
+
+    def test_empty_string_phone(self, customers_api, created_customer_ids):
+        """Empty phone should be accepted by Stripe."""
+        resp = customers_api.create(email="empty_phone@example.com", phone="")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        created_customer_ids.append(body["id"])
+
+    def test_list_max_limit(self, customers_api):
+        """Stripe allows limit up to 100."""
+        resp = customers_api.list_customers(limit=100)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["data"]) <= 100
+        validate_schema(body, CUSTOMER_LIST_SCHEMA)

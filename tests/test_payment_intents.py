@@ -9,6 +9,7 @@ from schemas.payment_intent_schema import (
     PAYMENT_INTENT_SCHEMA,
     PAYMENT_INTENT_CONFIRM_SCHEMA,
 )
+from schemas.customer_schema import STRIPE_ERROR_SCHEMA
 from utils.validators import (
     validate_schema, is_valid_iso_currency,
     assert_response_time, assert_response_headers,
@@ -17,7 +18,13 @@ from utils.test_data import (
     VALID_PAYMENT_INTENT,
     PAYMENT_INTENT_WITH_RECEIPT,
     PAYMENT_INTENT_MANUAL_CAPTURE,
+    PAYMENT_INTENT_MIN_AMOUNT,
+    PAYMENT_INTENT_LARGE_AMOUNT,
+    PAYMENT_INTENT_EUR,
+    PAYMENT_INTENT_GBP,
+    PAYMENT_INTENT_FLOAT_AMOUNT,
     CARD_VISA_SUCCESS,
+    CARD_MASTERCARD_SUCCESS,
 )
 
 
@@ -410,3 +417,199 @@ class TestIdempotency:
 
         created_payment_intent_ids.append(body1["id"])
         created_payment_intent_ids.append(body2["id"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Additional Positive Tests
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Additional Positive Scenarios")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentPositive:
+
+    @allure.description("Verify Mastercard test token works alongside Visa.")
+    def test_confirm_with_mastercard(
+        self, payments_api, created_payment_intent_ids
+    ):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.confirm(pi["id"], payment_method=CARD_MASTERCARD_SUCCESS)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["status"] == "succeeded"
+
+    @allure.description("Verify PaymentIntent creation works with EUR currency.")
+    def test_create_with_eur_currency(
+        self, payments_api, created_payment_intent_ids
+    ):
+        resp = payments_api.create(**PAYMENT_INTENT_EUR)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["currency"] == "eur"
+        assert body["amount"] == 1500
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Verify PaymentIntent creation works with GBP currency.")
+    def test_create_with_gbp_currency(
+        self, payments_api, created_payment_intent_ids
+    ):
+        resp = payments_api.create(**PAYMENT_INTENT_GBP)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["currency"] == "gbp"
+        assert body["amount"] == 2500
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Verify partial capture: capture less than the authorized amount.")
+    def test_partial_capture(
+        self, payments_api, created_payment_intent_ids
+    ):
+        pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
+        created_payment_intent_ids.append(pi["id"])
+        payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        partial_amount = pi["amount"] - 500
+        resp = payments_api.capture(pi["id"], amount_to_capture=partial_amount)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["status"] == "succeeded"
+        assert body["amount_received"] == partial_amount
+
+    @allure.description("Verify canceling a PaymentIntent that hasn't been confirmed yet.")
+    def test_cancel_uncaptured_intent(
+        self, payments_api, created_payment_intent_ids
+    ):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.cancel(pi["id"])
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["status"] == "canceled"
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Negative – PaymentIntent Error Scenarios
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Negative Error Scenarios")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.negative
+@pytest.mark.payment_intents
+class TestPaymentIntentNegativeErrors:
+
+    def test_cancel_already_succeeded_intent(
+        self, payments_api, created_payment_intent_ids
+    ):
+        """Canceling a succeeded PaymentIntent should fail."""
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+        resp = payments_api.cancel(pi["id"])
+
+        assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    def test_confirm_with_invalid_payment_method(
+        self, payments_api, created_payment_intent_ids
+    ):
+        """Using a garbage payment method token should fail."""
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.confirm(pi["id"], payment_method="pm_invalid_garbage_token")
+        assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    def test_float_amount_rejected(self, payments_api):
+        """Stripe amount must be integer (minor units); float should fail."""
+        resp = payments_api.create(**PAYMENT_INTENT_FLOAT_AMOUNT)
+        assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    def test_fetch_invalid_payment_intent_id(self, payments_api):
+        """Completely invalid ID format should return error."""
+        resp = payments_api.retrieve("not_a_valid_id")
+        assert resp.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Performance – PaymentIntent Response Times
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Performance")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentPerformance:
+
+    def test_create_response_time(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**VALID_PAYMENT_INTENT)
+        assert_response_time(resp, max_seconds=5.0)
+        created_payment_intent_ids.append(resp.json()["id"])
+
+    def test_fetch_response_time(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.retrieve(pi["id"])
+        assert_response_time(resp, max_seconds=5.0)
+
+    def test_confirm_response_time(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+        assert_response_time(resp, max_seconds=5.0)
+
+    def test_capture_response_time(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
+        created_payment_intent_ids.append(pi["id"])
+        payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        resp = payments_api.capture(pi["id"])
+        assert_response_time(resp, max_seconds=5.0)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Boundary / Limit – PaymentIntent Amounts
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Boundary & Limit")
+@allure.severity(allure.severity_level.MINOR)
+@pytest.mark.negative
+@pytest.mark.payment_intents
+class TestPaymentIntentBoundary:
+
+    @allure.description("Stripe minimum for USD is 50 cents ($0.50). Verify it's accepted.")
+    def test_minimum_valid_amount(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**PAYMENT_INTENT_MIN_AMOUNT)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["amount"] == 50
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Test with a very large amount near the boundary.")
+    def test_large_amount(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**PAYMENT_INTENT_LARGE_AMOUNT)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["amount"] == 99999999
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Amount just below Stripe minimum (49 cents) should be rejected.")
+    def test_below_minimum_amount(self, payments_api):
+        resp = payments_api.create(
+            amount=49, currency="usd", **{"payment_method_types[]": "card"}
+        )
+        assert resp.status_code == 400
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)

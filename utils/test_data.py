@@ -64,6 +64,38 @@ PAYMENT_INTENT_NEGATIVE_AMOUNT = {
 }
 
 
+# ── Boundary / limit payloads ──────────────────────────────────────
+PAYMENT_INTENT_MIN_AMOUNT = {
+    "amount": 50,
+    "currency": "usd",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_LARGE_AMOUNT = {
+    "amount": 99999999,
+    "currency": "usd",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_EUR = {
+    "amount": 1500,
+    "currency": "eur",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_GBP = {
+    "amount": 2500,
+    "currency": "gbp",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_FLOAT_AMOUNT = {
+    "amount": 20.50,
+    "currency": "usd",
+    "payment_method_types[]": "card",
+}
+
+
 # ── Stripe test payment method tokens ──────────────────────────────
 # https://docs.stripe.com/testing#cards
 CARD_VISA_SUCCESS = "pm_card_visa"
