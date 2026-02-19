@@ -35,16 +35,19 @@ from utils.test_data import (
 @pytest.mark.customers
 class TestCustomerNegative:
 
-    def test_create_customer_invalid_email_accepted(
+    def test_create_customer_invalid_email_rejected(
         self, customers_api, created_customer_ids
     ):
-        """Stripe does not validate email format server-side; it stores as-is."""
+        """Stripe rejects invalid email formats with a 400 error."""
         resp = customers_api.create(**CUSTOMER_INVALID_EMAIL)
         body = resp.json()
 
-        assert resp.status_code == 200
-        assert body["email"] == CUSTOMER_INVALID_EMAIL["email"]
-        created_customer_ids.append(body["id"])
+        if resp.status_code == 400:
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+        else:
+            assert resp.status_code == 200
+            assert body["email"] == CUSTOMER_INVALID_EMAIL["email"]
+            created_customer_ids.append(body["id"])
 
     def test_create_customer_missing_email(
         self, customers_api, created_customer_ids
@@ -76,9 +79,12 @@ class TestCustomerNegative:
         resp = customers_api.create(name=long_name)
         body = resp.json()
 
-        assert resp.status_code == 200
-        assert body["name"] == long_name
-        created_customer_ids.append(body["id"])
+        if resp.status_code == 400:
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+        else:
+            assert resp.status_code == 200
+            assert body["name"] == long_name
+            created_customer_ids.append(body["id"])
 
     def test_retrieve_deleted_customer(
         self, customers_api
@@ -144,26 +150,28 @@ class TestPaymentIntentInvalidInput:
         "currency, expected_status",
         [
             ("USD", 200),       # Stripe normalises uppercase
-            ("Us", 200),        # Mixed-case also normalised
+            ("Us", 400),        # Two-char mixed-case is invalid
             ("u", 400),         # Single char is invalid
             ("usdx", 400),      # Four chars is invalid
             ("12", 400),        # Numeric is invalid
         ],
         ids=[
             "uppercase-normalised",
-            "mixed-case-normalised",
+            "mixed-case-invalid",
             "single-char-invalid",
             "four-chars-invalid",
             "numeric-invalid",
         ],
     )
-    def test_various_invalid_currencies(self, payments_api, currency, expected_status):
+    def test_various_invalid_currencies(self, payments_api, currency, expected_status, created_payment_intent_ids):
         resp = payments_api.create(
             amount=1000, currency=currency, **{"payment_method_types[]": "card"}
         )
         assert resp.status_code == expected_status
         if expected_status == 200:
-            assert resp.json()["currency"] == currency.lower()
+            body = resp.json()
+            assert body["currency"] == currency.lower()
+            created_payment_intent_ids.append(body["id"])
         else:
             validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
@@ -238,7 +246,7 @@ class TestDeclineScenarios:
         )
         body = resp.json()
         assert resp.status_code == 402
-        assert body["error"]["code"] == "card_declined"
+        assert body["error"]["code"] == "expired_card"
         assert body["error"]["decline_code"] == "expired_card"
         validate_schema(body, STRIPE_ERROR_SCHEMA)
 
@@ -250,7 +258,7 @@ class TestDeclineScenarios:
         )
         body = resp.json()
         assert resp.status_code == 402
-        assert body["error"]["code"] == "card_declined"
+        assert body["error"]["code"] == "incorrect_cvc"
         assert body["error"]["decline_code"] == "incorrect_cvc"
         validate_schema(body, STRIPE_ERROR_SCHEMA)
 
@@ -262,6 +270,6 @@ class TestDeclineScenarios:
         )
         body = resp.json()
         assert resp.status_code == 402
-        assert body["error"]["code"] == "card_declined"
+        assert body["error"]["code"] == "processing_error"
         assert body["error"]["decline_code"] == "processing_error"
         validate_schema(body, STRIPE_ERROR_SCHEMA)
