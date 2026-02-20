@@ -151,6 +151,24 @@ class TestPaymentIntentInvalidInput:
         assert resp.status_code == 400
         validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
+    @allure.description("SCHEMA-01: Trigger known error and validate error schema contract (type, message, code, param).")
+    def test_error_schema_contract(self, payments_api):
+        """Ensure error responses have proper structure with type, message, and optional code/param."""
+        resp = payments_api.create(
+            amount=1000, currency="zzz", **{"payment_method_types[]": "card"}
+        )
+        body = resp.json()
+
+        assert resp.status_code == 400
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+        assert isinstance(body["error"]["type"], str)
+        assert len(body["error"]["message"]) > 0
+        # code and param are optional but should be strings when present
+        if "code" in body["error"]:
+            assert isinstance(body["error"]["code"], str)
+        if "param" in body["error"]:
+            assert isinstance(body["error"]["param"], str)
+
     @pytest.mark.parametrize(
         "currency, expected_status",
         [

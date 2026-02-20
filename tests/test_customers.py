@@ -4,10 +4,13 @@ import allure
 import pytest
 
 from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA, STRIPE_ERROR_SCHEMA
+from schemas.customer_schema import STRIPE_ERROR_SCHEMA
 from utils.validators import (
     validate_schema, is_valid_email, is_valid_phone,
     assert_response_time, assert_response_headers,
 )
+import uuid
+
 from utils.test_data import VALID_CUSTOMER, CUSTOMER_MINIMAL
 
 
@@ -125,13 +128,20 @@ class TestFetchCustomer:
             assert body["email"] == VALID_CUSTOMER["email"]
             validate_schema(body, CUSTOMER_SCHEMA)
 
+    @allure.description("Fetch non-existing customer returns 404 with error schema containing type, message.")
     def test_fetch_non_existing_customer(self, customers_api):
         resp = customers_api.retrieve("cus_nonexistent000000000")
+        body = resp.json()
+
         assert resp.status_code == 404
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+        assert body["error"]["type"] is not None
+        assert len(body["error"]["message"]) > 0
 
     def test_fetch_invalid_id_format(self, customers_api):
         resp = customers_api.retrieve("invalid_id")
         assert resp.status_code == 404
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -396,3 +406,76 @@ class TestCustomerBoundary:
         assert resp.status_code == 200
         assert len(body["data"]) <= 100
         validate_schema(body, CUSTOMER_LIST_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Customer – Invalid Phone Validation
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Phone Validation")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.negative
+@pytest.mark.customers
+class TestCustomerPhoneValidation:
+
+    @allure.description(
+        "CUS-NEG-04: Create customer with invalid phone 'abc123'. "
+        "Stripe may accept it, but our E.164 validator should flag it."
+    )
+    def test_create_customer_invalid_phone(self, customers_api, created_customer_ids):
+        resp = customers_api.create(
+            name="Bad Phone", email="badphone@example.com", phone="abc123"
+        )
+        body = resp.json()
+
+        if resp.status_code == 200:
+            # Stripe accepted — but our validator correctly flags the format
+            assert not is_valid_phone(body.get("phone", "")), (
+                "Phone 'abc123' should fail E.164 validation"
+            )
+            created_customer_ids.append(body["id"])
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Customer – Idempotency
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Idempotency")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerIdempotency:
+
+    @allure.description(
+        "IDEMP-E2E-02: Same Idempotency-Key on POST /customers returns the same customer."
+    )
+    def test_same_idempotency_key_returns_same_customer(
+        self, customers_api, created_customer_ids
+    ):
+        key = f"cust-idem-{uuid.uuid4()}"
+        headers = {"Idempotency-Key": key}
+
+        with allure.step("Create customer twice with same idempotency key"):
+            resp1 = customers_api.session.post(
+                f"{customers_api.base_url}/customers",
+                data={"email": "idem@example.com", "name": "Idem Test"},
+                headers=headers,
+                timeout=customers_api.timeout,
+            )
+            resp2 = customers_api.session.post(
+                f"{customers_api.base_url}/customers",
+                data={"email": "idem@example.com", "name": "Idem Test"},
+                headers=headers,
+                timeout=customers_api.timeout,
+            )
+
+        with allure.step("Verify both return the same customer ID"):
+            body1 = resp1.json()
+            body2 = resp2.json()
+            assert resp1.status_code == 200
+            assert resp2.status_code == 200
+            assert body1["id"] == body2["id"]
+
+        created_customer_ids.append(body1["id"])

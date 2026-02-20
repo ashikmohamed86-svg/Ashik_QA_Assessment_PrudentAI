@@ -16,6 +16,7 @@ from utils.validators import (
 )
 from utils.test_data import (
     VALID_PAYMENT_INTENT,
+    VALID_CUSTOMER,
     PAYMENT_INTENT_WITH_RECEIPT,
     PAYMENT_INTENT_MANUAL_CAPTURE,
     PAYMENT_INTENT_MIN_AMOUNT,
@@ -25,6 +26,7 @@ from utils.test_data import (
     PAYMENT_INTENT_FLOAT_AMOUNT,
     CARD_VISA_SUCCESS,
     CARD_MASTERCARD_SUCCESS,
+    CARD_DECLINED,
 )
 
 
@@ -115,6 +117,27 @@ class TestCreatePaymentIntent:
         validate_schema(body, PAYMENT_INTENT_SCHEMA)
         created_payment_intent_ids.append(body["id"])
 
+    @allure.description("PI-E2E-02: Create PaymentIntent with customer attached; verify customer ID echoed back.")
+    def test_create_with_customer_attached(
+        self, customers_api, payments_api, created_customer_ids, created_payment_intent_ids
+    ):
+        with allure.step("Create a customer"):
+            cust = customers_api.create(**VALID_CUSTOMER).json()
+            created_customer_ids.append(cust["id"])
+
+        with allure.step("Create PaymentIntent with customer"):
+            resp = payments_api.create(
+                amount=1000, currency="usd", customer=cust["id"],
+                **{"payment_method_types[]": "card"},
+            )
+            body = resp.json()
+
+        with allure.step("Verify customer ID is in response"):
+            assert resp.status_code == 200
+            assert body["customer"] == cust["id"]
+            assert body["status"] in ("requires_payment_method", "requires_confirmation")
+            created_payment_intent_ids.append(body["id"])
+
 
 # ─────────────────────────────────────────────────────────────────────
 #  Confirm PaymentIntent
@@ -166,6 +189,14 @@ class TestConfirmPaymentIntent:
         )
 
         assert resp.status_code == 400
+
+    @allure.description("CONF-NEG-02: Confirm a non-existing PI should return 404 with error schema.")
+    def test_confirm_non_existing_intent(self, payments_api):
+        resp = payments_api.confirm("pi_DOES_NOT_EXIST_123", payment_method=CARD_VISA_SUCCESS)
+        body = resp.json()
+
+        assert resp.status_code == 404
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -283,14 +314,27 @@ class TestFetchPaymentIntent:
             assert captured["status"] == "succeeded"
             assert captured["amount_received"] == PAYMENT_INTENT_MANUAL_CAPTURE["amount"]
 
+    @allure.description(
+        "FETCHPI-VAL-01: Verify created timestamp is stable across fetches "
+        "and does not change after confirm."
+    )
     def test_verify_timestamps(
         self, payments_api, created_payment_intent_ids
     ):
-        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
-        created_payment_intent_ids.append(pi["id"])
+        with allure.step("Create PI and check timestamp"):
+            pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+            created_payment_intent_ids.append(pi["id"])
+            assert isinstance(pi["created"], int)
+            assert pi["created"] > 0
 
-        assert isinstance(pi["created"], int)
-        assert pi["created"] > 0
+        with allure.step("Fetch PI and verify created timestamp is stable"):
+            fetched = payments_api.retrieve(pi["id"]).json()
+            assert fetched["created"] == pi["created"]
+
+        with allure.step("Confirm PI and verify created timestamp unchanged"):
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+            confirmed = payments_api.retrieve(pi["id"]).json()
+            assert confirmed["created"] == pi["created"]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -333,11 +377,17 @@ class TestEndToEndPaymentFlow:
             ).json()
             assert confirmed["status"] == "succeeded"
 
-        with allure.step("Fetch and verify final state"):
+        with allure.step("Fetch PI and verify final state"):
             fetched = payments_api.retrieve(pi["id"]).json()
             assert fetched["status"] == "succeeded"
             assert fetched["amount"] == 7500
             assert fetched["customer"] == cust["id"]
+
+        with allure.step("Fetch Customer and ensure still accessible + fields unchanged"):
+            cust_after = customers_api.retrieve(cust["id"]).json()
+            assert cust_after["id"] == cust["id"]
+            assert cust_after["name"] == "E2E User"
+            assert cust_after["email"] == "e2e@example.com"
 
     @allure.description("Full flow: Customer -> PaymentIntent(manual) -> Confirm -> Capture -> Verify.")
     def test_full_manual_capture_flow(
@@ -613,3 +663,141 @@ class TestPaymentIntentBoundary:
         )
         assert resp.status_code == 400
         validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    @allure.description("PI-VAL-01: Amount=1 boundary test — assert actual Stripe behavior.")
+    def test_amount_boundary_one(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(
+            amount=1, currency="usd", **{"payment_method_types[]": "card"}
+        )
+        body = resp.json()
+
+        if resp.status_code == 200:
+            assert body["amount"] == 1
+            created_payment_intent_ids.append(body["id"])
+        else:
+            # Stripe rejects amount=1 for USD (minimum is 50)
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent – Missing/Empty Field Validation
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Missing Field Validation")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.negative
+@pytest.mark.payment_intents
+class TestPaymentIntentMissingFields:
+
+    @allure.description("PI-VAL-07: Create PI without payment_method_types should use Stripe default or error.")
+    def test_missing_payment_method_types(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(amount=1000, currency="usd")
+        body = resp.json()
+
+        # Stripe may default to card or return error — assert actual behavior
+        if resp.status_code == 200:
+            assert body["id"].startswith("pi_")
+            created_payment_intent_ids.append(body["id"])
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("PI-VAL-07b: Create PI with empty payment_method_types.")
+    def test_empty_payment_method_types(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(
+            amount=1000, currency="usd", **{"payment_method_types[]": ""}
+        )
+        body = resp.json()
+
+        if resp.status_code == 200:
+            created_payment_intent_ids.append(body["id"])
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("PI-VAL-08: Create PI with invalid receipt_email format.")
+    def test_invalid_receipt_email(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(
+            amount=1000, currency="usd",
+            receipt_email="badmail",
+            **{"payment_method_types[]": "card"},
+        )
+        body = resp.json()
+
+        if resp.status_code == 200:
+            # Stripe accepted — our validator flags it
+            from utils.validators import is_valid_email
+            assert not is_valid_email(body.get("receipt_email", "")), (
+                "receipt_email 'badmail' should fail email format validation"
+            )
+            created_payment_intent_ids.append(body["id"])
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  E2E Negative Flows
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("E2E Negative Flows")
+@allure.severity(allure.severity_level.CRITICAL)
+@pytest.mark.e2e
+@pytest.mark.payment_intents
+class TestE2ENegativeFlows:
+
+    @allure.description(
+        "FLOW-E2E-NEG-01: Full declined payment flow — "
+        "Create Customer → Create PI → Confirm with declined card → Fetch PI."
+    )
+    def test_payment_declined_e2e(
+        self, customers_api, payments_api,
+        created_customer_ids, created_payment_intent_ids,
+    ):
+        with allure.step("Create customer"):
+            cust = customers_api.create(
+                name="Decline User", email="decline@example.com"
+            ).json()
+            created_customer_ids.append(cust["id"])
+
+        with allure.step("Create PI linked to customer"):
+            pi = payments_api.create(
+                amount=5000, currency="usd", customer=cust["id"],
+                **{"payment_method_types[]": "card"},
+            ).json()
+            created_payment_intent_ids.append(pi["id"])
+
+        with allure.step("Confirm with declined card"):
+            resp = payments_api.confirm(pi["id"], payment_method=CARD_DECLINED)
+            assert resp.status_code == 402
+            assert resp.json()["error"]["code"] == "card_declined"
+
+        with allure.step("Fetch PI and verify NOT succeeded"):
+            fetched = payments_api.retrieve(pi["id"]).json()
+            assert fetched["status"] != "succeeded"
+            assert fetched["status"] == "requires_payment_method"
+
+    @allure.description(
+        "FLOW-E2E-NEG-02: Confirm without PM fails, then recover with valid card."
+    )
+    def test_confirm_without_pm_then_recover(
+        self, payments_api, created_payment_intent_ids,
+    ):
+        with allure.step("Create PI"):
+            pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+            created_payment_intent_ids.append(pi["id"])
+
+        with allure.step("Confirm without payment method — expect error"):
+            resp1 = payments_api.confirm(pi["id"])
+            assert resp1.status_code == 400
+
+        with allure.step("Recover: confirm again with valid Visa card"):
+            resp2 = payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+            body = resp2.json()
+            assert resp2.status_code == 200
+            assert body["status"] == "succeeded"
+
+        with allure.step("Fetch and verify final succeeded state"):
+            fetched = payments_api.retrieve(pi["id"]).json()
+            assert fetched["status"] == "succeeded"
