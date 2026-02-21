@@ -8,6 +8,8 @@ import pytest
 from schemas.payment_intent_schema import (
     PAYMENT_INTENT_SCHEMA,
     PAYMENT_INTENT_CONFIRM_SCHEMA,
+    PAYMENT_INTENT_LIST_SCHEMA,
+    CANCEL_RESPONSE_SCHEMA,
 )
 from schemas.customer_schema import STRIPE_ERROR_SCHEMA
 from utils.validators import (
@@ -24,6 +26,9 @@ from utils.test_data import (
     PAYMENT_INTENT_EUR,
     PAYMENT_INTENT_GBP,
     PAYMENT_INTENT_FLOAT_AMOUNT,
+    PAYMENT_INTENT_JPY,
+    PAYMENT_INTENT_WITH_DESCRIPTION,
+    PAYMENT_INTENT_WITH_METADATA,
     CARD_VISA_SUCCESS,
     CARD_MASTERCARD_SUCCESS,
     CARD_DECLINED,
@@ -801,3 +806,434 @@ class TestE2ENegativeFlows:
         with allure.step("Fetch and verify final succeeded state"):
             fetched = payments_api.retrieve(pi["id"]).json()
             assert fetched["status"] == "succeeded"
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Zero-Decimal Currency & Description Tests
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Zero-Decimal Currency & Description")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentZeroCurrency:
+
+    @allure.description("JPY is a zero-decimal currency; amount=500 means 500 yen, not 5.00.")
+    def test_jpy_zero_decimal_currency(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**PAYMENT_INTENT_JPY)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["currency"] == "jpy"
+        assert body["amount"] == 500
+        validate_schema(body, PAYMENT_INTENT_SCHEMA)
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Verify PI creation with description field.")
+    def test_create_with_description(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**PAYMENT_INTENT_WITH_DESCRIPTION)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["description"] == PAYMENT_INTENT_WITH_DESCRIPTION["description"]
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Cancel PI with cancellation_reason parameter.")
+    def test_cancel_with_reason(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.cancel(pi["id"], cancellation_reason="requested_by_customer")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["status"] == "canceled"
+        assert body.get("cancellation_reason") == "requested_by_customer"
+        validate_schema(body, CANCEL_RESPONSE_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent List & Search
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("List & Search")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentListAndSearch:
+
+    @allure.description("List payment intents with limit parameter.")
+    def test_list_with_limit(self, payments_api):
+        resp = payments_api.list_intents(limit=3)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["data"]) <= 3
+        validate_schema(body, PAYMENT_INTENT_LIST_SCHEMA)
+
+    @allure.description("Paginate through payment intents using starting_after cursor.")
+    def test_paginate_payment_intents(self, payments_api):
+        page1_resp = payments_api.list_intents(limit=2)
+        page1 = page1_resp.json()
+        assert page1_resp.status_code == 200
+        assert len(page1["data"]) > 0
+
+        if page1["has_more"]:
+            cursor = page1["data"][-1]["id"]
+            page2 = payments_api.list_intents(limit=2, starting_after=cursor).json()
+            assert page2["data"][0]["id"] != cursor
+
+    @allure.description("Verify listing returns only payment_intent objects.")
+    def test_list_object_types(self, payments_api):
+        resp = payments_api.list_intents(limit=5)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        for pi in body["data"]:
+            assert pi["object"] == "payment_intent"
+            assert pi["id"].startswith("pi_")
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent Metadata
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Metadata")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentMetadata:
+
+    @allure.description("Create PI with metadata and verify it persists.")
+    def test_create_with_metadata(self, payments_api, created_payment_intent_ids):
+        resp = payments_api.create(**PAYMENT_INTENT_WITH_METADATA)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["metadata"]["order_id"] == "ord_12345"
+        assert body["metadata"]["source"] == "automation"
+        created_payment_intent_ids.append(body["id"])
+
+    @allure.description("Update PI metadata after creation.")
+    def test_update_metadata(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.update(
+            pi["id"],
+            **{"metadata[tracking]": "updated_value", "metadata[new_key]": "new_value"},
+        )
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["metadata"]["tracking"] == "updated_value"
+        assert body["metadata"]["new_key"] == "new_value"
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent – Update Before Confirmation
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Update PaymentIntent")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestPaymentIntentUpdate:
+
+    @allure.description("Update PI amount before confirmation — should succeed.")
+    def test_update_amount_before_confirm(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.update(pi["id"], amount=5000)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["amount"] == 5000
+
+    @allure.description("Update PI description after creation.")
+    def test_update_description(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.update(pi["id"], description="Updated order description")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["description"] == "Updated order description"
+
+    @allure.description("Updating currency on unconfirmed PI is allowed by Stripe.")
+    def test_update_currency_allowed_before_confirm(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.update(pi["id"], currency="eur")
+        body = resp.json()
+        # Stripe allows currency changes on unconfirmed PIs
+        assert resp.status_code == 200
+        assert body["currency"] == "eur"
+
+    @allure.description("Retrieve a canceled PI and validate full canceled state schema.")
+    def test_retrieve_canceled_pi(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+        payments_api.cancel(pi["id"])
+
+        fetched = payments_api.retrieve(pi["id"]).json()
+        assert fetched["status"] == "canceled"
+        assert fetched["id"] == pi["id"]
+        validate_schema(fetched, PAYMENT_INTENT_SCHEMA)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent – All Cancellation Reasons
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Cancellation Reasons")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.payment_intents
+class TestCancellationReasons:
+
+    @pytest.mark.parametrize(
+        "reason",
+        ["duplicate", "fraudulent", "requested_by_customer", "abandoned"],
+        ids=["duplicate", "fraudulent", "requested_by_customer", "abandoned"],
+    )
+    @allure.description("Cancel PI with each valid cancellation_reason value.")
+    def test_cancel_with_all_reasons(self, payments_api, created_payment_intent_ids, reason):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.cancel(pi["id"], cancellation_reason=reason)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert body["status"] == "canceled"
+        assert body.get("cancellation_reason") == reason
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent – List Edge Cases
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("List Edge Cases")
+@allure.severity(allure.severity_level.MINOR)
+@pytest.mark.payment_intents
+class TestPaymentIntentListEdgeCases:
+
+    @allure.description("List PIs filtered by customer ID.")
+    def test_list_by_customer(self, customers_api, payments_api,
+                               created_customer_ids, created_payment_intent_ids):
+        cust = customers_api.create(email="listfilter@example.com").json()
+        created_customer_ids.append(cust["id"])
+
+        pi = payments_api.create(
+            amount=1000, currency="usd", customer=cust["id"],
+            **{"payment_method_types[]": "card"},
+        ).json()
+        created_payment_intent_ids.append(pi["id"])
+
+        resp = payments_api.list_intents(limit=5, customer=cust["id"])
+        body = resp.json()
+
+        assert resp.status_code == 200
+        for item in body["data"]:
+            assert item["customer"] == cust["id"]
+
+    @allure.description("List PI response time should be under 5 seconds.")
+    def test_list_pi_response_time(self, payments_api):
+        resp = payments_api.list_intents(limit=10)
+        assert_response_time(resp, max_seconds=5.0)
+
+    @allure.description("Cancel PI response time should be under 5 seconds.")
+    def test_cancel_pi_response_time(self, payments_api, created_payment_intent_ids):
+        pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+        created_payment_intent_ids.append(pi["id"])
+        resp = payments_api.cancel(pi["id"])
+        assert_response_time(resp, max_seconds=5.0)
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  PaymentIntent – Charge & Receipt Verification
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("PaymentIntents API")
+@allure.story("Charge & Receipt Verification")
+@allure.severity(allure.severity_level.CRITICAL)
+@pytest.mark.payment_intents
+class TestChargeReceiptVerification:
+
+    @allure.description(
+        "After a successful payment, latest_charge should be populated "
+        "and point to a valid charge object."
+    )
+    def test_latest_charge_populated_after_payment(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create and confirm PI"):
+            pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        with allure.step("Fetch PI and verify latest_charge"):
+            fetched = payments_api.retrieve(pi["id"]).json()
+            assert fetched["status"] == "succeeded"
+            assert fetched.get("latest_charge") is not None
+            assert fetched["latest_charge"].startswith("ch_")
+
+    @allure.description(
+        "Expand charges on a succeeded PI to verify charge details — "
+        "amount, currency, paid status, and payment method."
+    )
+    def test_expand_charges_after_payment(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create and confirm PI"):
+            pi = payments_api.create(
+                amount=3000, currency="usd",
+                **{"payment_method_types[]": "card"},
+            ).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        with allure.step("Fetch with expand[]=latest_charge"):
+            url = f"{payments_api.base_url}/payment_intents/{pi['id']}"
+            resp = payments_api.session.get(
+                url,
+                params={"expand[]": "latest_charge"},
+                timeout=payments_api.timeout,
+            )
+            body = resp.json()
+
+        with allure.step("Verify expanded charge details"):
+            assert resp.status_code == 200
+            charge = body["latest_charge"]
+            # When expanded, latest_charge is an object not a string
+            assert isinstance(charge, dict)
+            assert charge["object"] == "charge"
+            assert charge["amount"] == 3000
+            assert charge["currency"] == "usd"
+            assert charge["paid"] is True
+            assert charge["status"] == "succeeded"
+
+    @allure.description(
+        "After a successful payment, the expanded charge should contain "
+        "a receipt_url for the customer."
+    )
+    def test_receipt_url_generated_after_payment(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create and confirm PI with receipt_email"):
+            pi = payments_api.create(
+                amount=2500, currency="usd",
+                receipt_email="receipt_test@example.com",
+                **{"payment_method_types[]": "card"},
+            ).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        with allure.step("Fetch with expanded charge and check receipt_url"):
+            url = f"{payments_api.base_url}/payment_intents/{pi['id']}"
+            resp = payments_api.session.get(
+                url,
+                params={"expand[]": "latest_charge"},
+                timeout=payments_api.timeout,
+            )
+            body = resp.json()
+            charge = body["latest_charge"]
+
+            assert isinstance(charge, dict)
+            assert charge.get("receipt_url") is not None
+            assert charge["receipt_url"].startswith("https://")
+            assert charge["receipt_email"] == "receipt_test@example.com"
+
+    @allure.description(
+        "After a successful payment, the expanded charge should contain "
+        "payment_method_details with card brand and last4."
+    )
+    def test_charge_payment_method_details(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create and confirm PI"):
+            pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        with allure.step("Fetch with expanded charge"):
+            url = f"{payments_api.base_url}/payment_intents/{pi['id']}"
+            resp = payments_api.session.get(
+                url,
+                params={"expand[]": "latest_charge"},
+                timeout=payments_api.timeout,
+            )
+            charge = resp.json()["latest_charge"]
+
+        with allure.step("Verify payment method details"):
+            assert isinstance(charge, dict)
+            pm_details = charge.get("payment_method_details")
+            assert pm_details is not None
+            assert pm_details["type"] == "card"
+            card = pm_details["card"]
+            assert card["brand"] == "visa"
+            assert len(card["last4"]) == 4
+            assert card["exp_month"] is not None
+            assert card["exp_year"] is not None
+
+    @allure.description(
+        "Verify that an uncaptured (manual capture) PI does NOT generate "
+        "a succeeded charge — charge should be status=pending or amount_captured=0."
+    )
+    def test_charge_not_captured_until_capture(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create manual-capture PI and confirm"):
+            pi = payments_api.create(**PAYMENT_INTENT_MANUAL_CAPTURE).json()
+            created_payment_intent_ids.append(pi["id"])
+            payments_api.confirm(pi["id"], payment_method=CARD_VISA_SUCCESS)
+
+        with allure.step("Fetch with expanded charge before capture"):
+            url = f"{payments_api.base_url}/payment_intents/{pi['id']}"
+            resp = payments_api.session.get(
+                url,
+                params={"expand[]": "latest_charge"},
+                timeout=payments_api.timeout,
+            )
+            body = resp.json()
+            assert body["status"] == "requires_capture"
+            charge = body["latest_charge"]
+            assert isinstance(charge, dict)
+            assert charge["captured"] is False
+
+        with allure.step("Capture and verify charge is now captured"):
+            payments_api.capture(pi["id"])
+            resp2 = payments_api.session.get(
+                url,
+                params={"expand[]": "latest_charge"},
+                timeout=payments_api.timeout,
+            )
+            body2 = resp2.json()
+            assert body2["status"] == "succeeded"
+            assert body2["latest_charge"]["captured"] is True
+
+    @allure.description(
+        "A declined payment should NOT produce a succeeded charge — "
+        "latest_charge should reflect the failure."
+    )
+    def test_declined_payment_no_succeeded_charge(
+        self, payments_api, created_payment_intent_ids
+    ):
+        with allure.step("Create PI and attempt confirm with declined card"):
+            pi = payments_api.create(**VALID_PAYMENT_INTENT).json()
+            created_payment_intent_ids.append(pi["id"])
+            resp = payments_api.confirm(pi["id"], payment_method=CARD_DECLINED)
+            assert resp.status_code == 402
+
+        with allure.step("Fetch PI and verify status is not succeeded"):
+            fetched = payments_api.retrieve(pi["id"]).json()
+            assert fetched["status"] != "succeeded"
+            # latest_charge may or may not be present depending on Stripe version
+            if fetched.get("latest_charge"):
+                url = f"{payments_api.base_url}/payment_intents/{pi['id']}"
+                expanded = payments_api.session.get(
+                    url,
+                    params={"expand[]": "latest_charge"},
+                    timeout=payments_api.timeout,
+                ).json()
+                charge = expanded["latest_charge"]
+                if isinstance(charge, dict):
+                    assert charge["status"] == "failed"

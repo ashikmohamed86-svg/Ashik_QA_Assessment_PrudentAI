@@ -41,3 +41,21 @@ def assert_response_headers(response) -> None:
     assert response.headers.get("Request-Id"), (
         "Missing Request-Id header — required for Stripe request traceability"
     )
+
+
+def assert_security_headers(response) -> None:
+    """Validate security-related response headers (HSTS, content-type options, Stripe-Version)."""
+    # Strict-Transport-Security — Stripe enforces HTTPS
+    hsts = response.headers.get("Strict-Transport-Security")
+    assert hsts is not None, "Missing Strict-Transport-Security header"
+    assert "max-age" in hsts, f"HSTS header missing max-age directive: {hsts}"
+
+    # X-Content-Type-Options — prevent MIME-type sniffing (optional for APIs)
+    xcto = response.headers.get("X-Content-Type-Options")
+    if xcto is not None:
+        assert xcto.lower() == "nosniff", f"Expected 'nosniff', got: {xcto}"
+
+    # Stripe-Version — API version traceability
+    assert response.headers.get("Stripe-Version"), (
+        "Missing Stripe-Version header — required for API version traceability"
+    )

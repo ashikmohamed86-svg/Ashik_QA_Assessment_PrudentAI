@@ -1,7 +1,44 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(/Users/ashik/Ashik_QA_Assessment_PrudentAI/.venv/bin/pip install:*)",
+      "Bash(python3 -m venv:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(test:*)",
+      "Bash(STRIPE_TEST_SECRET_KEY=sk_test_dummy .venv/bin/pytest:*)",
+      "Bash(.venv/bin/python3:*)",
+      "Bash(python3:*)",
+      "Bash(git -C /Users/ashik/Ashik_QA_Assessment_PrudentAI status)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(gh auth refresh:*)",
+      "Bash(git rm:*)",
+      "Bash(git reset:*)",
+      "Bash(gh auth login:*)",
+      "Bash(pytest:*)",
+      "Bash(git -C /Users/ashik/Ashik_QA_Assessment_PrudentAI diff)",
+      "Bash(git -C /Users/ashik/Ashik_QA_Assessment_PrudentAI log --oneline -5)",
+      "Bash(git -C /Users/ashik/Ashik_QA_Assessment_PrudentAI add config/settings.py tests/test_negative_validation.py .github/workflows/test.yml)",
+      "Bash(git -C:*)",
+      "Bash(git merge:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pip3 install:*)",
+      "Bash(open:*)",
+      "Bash(python -c:*)",
+      "Bash(while read line)",
+      "Bash(do echo \"$line\")",
+      "Bash(done)",
+      "Bash(sudo xcodebuild:*)",
+      "Bash(/opt/homebrew/bin/git status)",
+      "Bash(brew list:*)",
+      "Bash(brew:*)"
     ]
   }
 }

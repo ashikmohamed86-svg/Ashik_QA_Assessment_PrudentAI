@@ -23,6 +23,9 @@ from utils.test_data import (
     CARD_EXPIRED,
     CARD_INCORRECT_CVC,
     CARD_PROCESSING_ERROR,
+    CARD_STOLEN,
+    CARD_LOST,
+    CARD_RADAR_BLOCK,
 )
 
 
@@ -301,4 +304,42 @@ class TestDeclineScenarios:
         assert resp.status_code == 402
         assert body["error"]["code"] == "processing_error"
         assert body["error"]["decline_code"] == "processing_error"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Stolen/fraudulent card decline using pm_card_chargeDeclinedFraudulent.")
+    def test_stolen_card(
+        self, payments_api, created_payment_intent_ids
+    ):
+        resp = self._create_and_confirm(
+            payments_api, CARD_STOLEN, created_payment_intent_ids
+        )
+        body = resp.json()
+        assert resp.status_code == 402
+        assert body["error"]["code"] == "card_declined"
+        assert "fraudulent" in body["error"]["decline_code"]
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Lost card decline using pm_card_chargeDeclinedLostCard.")
+    def test_lost_card(
+        self, payments_api, created_payment_intent_ids
+    ):
+        resp = self._create_and_confirm(
+            payments_api, CARD_LOST, created_payment_intent_ids
+        )
+        body = resp.json()
+        assert resp.status_code == 402
+        assert body["error"]["code"] == "card_declined"
+        assert body["error"]["decline_code"] == "lost_card"
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Radar-blocked card — Stripe's fraud detection blocks the payment.")
+    def test_radar_block(
+        self, payments_api, created_payment_intent_ids
+    ):
+        resp = self._create_and_confirm(
+            payments_api, CARD_RADAR_BLOCK, created_payment_intent_ids
+        )
+        body = resp.json()
+        assert resp.status_code == 402
+        assert body["error"]["code"] in ("card_declined", "blocked")
         validate_schema(body, STRIPE_ERROR_SCHEMA)

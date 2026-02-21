@@ -74,3 +74,83 @@ class TestHeadersEncoding:
         # (missing required params since it can't parse the JSON as form data)
         assert resp.status_code == 400
         validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+
+@allure.feature("Cross-Cutting")
+@allure.story("Auth on Multiple Endpoints")
+@allure.severity(allure.severity_level.CRITICAL)
+@pytest.mark.negative
+class TestAuthOnMultipleEndpoints:
+
+    @allure.description("Missing auth on POST /customers should return 401.")
+    def test_no_auth_post_customers(self):
+        resp = requests.post(
+            f"{Settings.BASE_URL}/customers",
+            data={"email": "noauth@example.com"},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Missing auth on POST /payment_intents should return 401.")
+    def test_no_auth_post_payment_intents(self):
+        resp = requests.post(
+            f"{Settings.BASE_URL}/payment_intents",
+            data={"amount": 1000, "currency": "usd"},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Missing auth on GET /payment_intents should return 401.")
+    def test_no_auth_get_payment_intents(self):
+        resp = requests.get(
+            f"{Settings.BASE_URL}/payment_intents",
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Missing auth on POST /refunds should return 401.")
+    def test_no_auth_post_refunds(self):
+        resp = requests.post(
+            f"{Settings.BASE_URL}/refunds",
+            data={"payment_intent": "pi_fake"},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+        validate_schema(resp.json(), STRIPE_ERROR_SCHEMA)
+
+
+@allure.feature("Cross-Cutting")
+@allure.story("Auth Format Variations")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.negative
+class TestAuthFormatVariations:
+
+    @allure.description("Using Basic auth instead of Bearer should return 401.")
+    def test_basic_auth_instead_of_bearer(self):
+        resp = requests.get(
+            f"{Settings.BASE_URL}/customers",
+            headers={"Authorization": f"Basic {Settings.API_KEY}"},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+
+    @allure.description("Sending API key without Bearer prefix should return 401.")
+    def test_key_without_bearer_prefix(self):
+        resp = requests.get(
+            f"{Settings.BASE_URL}/customers",
+            headers={"Authorization": Settings.API_KEY},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401
+
+    @allure.description("Sending empty Authorization header should return 401.")
+    def test_empty_authorization_header(self):
+        resp = requests.get(
+            f"{Settings.BASE_URL}/customers",
+            headers={"Authorization": ""},
+            timeout=Settings.REQUEST_TIMEOUT,
+        )
+        assert resp.status_code == 401

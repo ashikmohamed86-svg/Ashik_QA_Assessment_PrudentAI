@@ -4,7 +4,6 @@ import allure
 import pytest
 
 from schemas.customer_schema import CUSTOMER_SCHEMA, CUSTOMER_LIST_SCHEMA, STRIPE_ERROR_SCHEMA
-from schemas.customer_schema import STRIPE_ERROR_SCHEMA
 from utils.validators import (
     validate_schema, is_valid_email, is_valid_phone,
     assert_response_time, assert_response_headers,
@@ -242,6 +241,75 @@ class TestCustomerPagination:
         assert isinstance(resp["has_more"], bool)
         assert resp["has_more"] is True
 
+    @allure.description(
+        "Verify behavior when limit=0 is passed. "
+        "Stripe may accept it gracefully or return an error."
+    )
+    def test_limit_zero_edge_case(self, customers_api):
+        resp = customers_api.list_customers(limit=0)
+        body = resp.json()
+
+        if resp.status_code == 200:
+            # Stripe accepts limit=0 gracefully — returns results using default
+            validate_schema(body, CUSTOMER_LIST_SCHEMA)
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description(
+        "Verify behavior when limit=101 exceeds Stripe max of 100. "
+        "Stripe may cap it or return an error."
+    )
+    def test_limit_over_max_edge_case(self, customers_api):
+        resp = customers_api.list_customers(limit=101)
+        body = resp.json()
+
+        if resp.status_code == 200:
+            # Stripe accepts and caps at its max
+            validate_schema(body, CUSTOMER_LIST_SCHEMA)
+            assert len(body["data"]) <= 101
+        else:
+            assert resp.status_code == 400
+            validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Verify invalid starting_after cursor returns an error.")
+    def test_invalid_starting_after_cursor(self, customers_api):
+        resp = customers_api.list_customers(limit=1, starting_after="cus_invalid_cursor_xyz")
+        body = resp.json()
+
+        # Stripe returns 400 (resource_missing) for invalid cursors
+        assert resp.status_code in (400, 404), (
+            f"Expected error for invalid cursor, got {resp.status_code}"
+        )
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+
+    @allure.description("Paginate through all customers until has_more is false.")
+    def test_full_pagination_loop(self, customers_api):
+        """Walk pages until has_more=false (max 10 pages to avoid infinite loop)."""
+        seen_ids = set()
+        cursor = None
+        pages = 0
+        max_pages = 10
+
+        while pages < max_pages:
+            if cursor:
+                resp = customers_api.list_customers(limit=5, starting_after=cursor)
+            else:
+                resp = customers_api.list_customers(limit=5)
+            body = resp.json()
+            assert resp.status_code == 200
+
+            for cust in body["data"]:
+                assert cust["id"] not in seen_ids, f"Duplicate customer ID across pages: {cust['id']}"
+                seen_ids.add(cust["id"])
+
+            pages += 1
+            if not body["has_more"]:
+                break
+            cursor = body["data"][-1]["id"]
+
+        assert len(seen_ids) > 0, "Expected at least one customer across all pages"
+
 
 # ─────────────────────────────────────────────────────────────────────
 #  Metadata CRUD
@@ -407,6 +475,31 @@ class TestCustomerBoundary:
         assert len(body["data"]) <= 100
         validate_schema(body, CUSTOMER_LIST_SCHEMA)
 
+    @allure.description("Stripe allows duplicate emails — two customers with the same email should both be created.")
+    def test_duplicate_email_allowed(self, customers_api, created_customer_ids):
+        email = "duplicate_boundary@example.com"
+        resp1 = customers_api.create(email=email, name="Dup One")
+        resp2 = customers_api.create(email=email, name="Dup Two")
+        body1, body2 = resp1.json(), resp2.json()
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+        assert body1["id"] != body2["id"]
+        assert body1["email"] == body2["email"] == email
+
+        created_customer_ids.append(body1["id"])
+        created_customer_ids.append(body2["id"])
+
+    @allure.description("Stripe supports up to 50 metadata key-value pairs per object.")
+    def test_max_metadata_keys(self, customers_api, created_customer_ids):
+        metadata = {f"metadata[key_{i:02d}]": f"value_{i}" for i in range(50)}
+        resp = customers_api.create(email="max_meta@example.com", **metadata)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["metadata"]) == 50
+        created_customer_ids.append(body["id"])
+
 
 # ─────────────────────────────────────────────────────────────────────
 #  Customer – Invalid Phone Validation
@@ -479,3 +572,98 @@ class TestCustomerIdempotency:
             assert body1["id"] == body2["id"]
 
         created_customer_ids.append(body1["id"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Customer – Search & Filter
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Search & Filter")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerSearch:
+
+    @allure.description("Search customers by email — verify filtered results.")
+    def test_search_by_email(self, customers_api, created_customer_ids):
+        unique_email = f"search_{uuid.uuid4().hex[:8]}@example.com"
+        cust = customers_api.create(email=unique_email, name="Search Test").json()
+        created_customer_ids.append(cust["id"])
+
+        resp = customers_api.list_customers(limit=1, email=unique_email)
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["data"]) == 1
+        assert body["data"][0]["email"] == unique_email
+        assert body["data"][0]["id"] == cust["id"]
+
+    @allure.description("Search by email that does not exist returns empty list.")
+    def test_search_nonexistent_email(self, customers_api):
+        resp = customers_api.list_customers(limit=1, email="nonexistent_xyz_999@example.com")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        assert len(body["data"]) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Customer – Additional Update Tests
+# ─────────────────────────────────────────────────────────────────────
+@allure.feature("Customers API")
+@allure.story("Update Fields")
+@allure.severity(allure.severity_level.NORMAL)
+@pytest.mark.customers
+class TestCustomerUpdateFields:
+
+    @allure.description("Update customer phone independently without affecting other fields.")
+    def test_update_phone(self, customers_api, created_customer_ids):
+        cust = customers_api.create(**VALID_CUSTOMER).json()
+        created_customer_ids.append(cust["id"])
+
+        updated = customers_api.update(cust["id"], phone="+442071234567").json()
+        assert updated["phone"] == "+442071234567"
+        assert updated["name"] == VALID_CUSTOMER["name"]
+        assert updated["email"] == VALID_CUSTOMER["email"]
+
+    @allure.description("Update customer description after creation.")
+    def test_update_description(self, customers_api, created_customer_ids):
+        cust = customers_api.create(**VALID_CUSTOMER).json()
+        created_customer_ids.append(cust["id"])
+
+        updated = customers_api.update(cust["id"], description="Updated description").json()
+        assert updated["description"] == "Updated description"
+        assert updated["name"] == VALID_CUSTOMER["name"]
+
+    @allure.description("Whitespace-only name should be accepted by Stripe (distinct from empty string).")
+    def test_whitespace_only_name(self, customers_api, created_customer_ids):
+        resp = customers_api.create(name="   ", email="whitespace@example.com")
+        body = resp.json()
+
+        assert resp.status_code == 200
+        created_customer_ids.append(body["id"])
+
+    @allure.description("Verify created timestamp is within reasonable delta of current time (UTC).")
+    def test_timestamp_is_recent(self, customers_api, created_customer_ids):
+        import time
+        before = int(time.time())
+        cust = customers_api.create(email="timestamp@example.com").json()
+        after = int(time.time())
+        created_customer_ids.append(cust["id"])
+
+        assert before - 5 <= cust["created"] <= after + 5, (
+            f"Timestamp {cust['created']} not within expected range [{before}, {after}]"
+        )
+
+    @allure.description("Sending extra/unknown parameters should be rejected by Stripe.")
+    def test_extra_unknown_parameters_rejected(self, customers_api):
+        resp = customers_api.create(
+            email="extra_params@example.com",
+            unknown_field="should_be_rejected",
+            another_fake_field="also_rejected",
+        )
+        body = resp.json()
+
+        # Stripe rejects unknown parameters with 400
+        assert resp.status_code == 400
+        validate_schema(body, STRIPE_ERROR_SCHEMA)
+        assert body["error"]["code"] == "parameter_unknown"

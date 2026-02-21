@@ -105,3 +105,41 @@ CARD_INSUFFICIENT_FUNDS = "pm_card_chargeDeclinedInsufficientFunds"
 CARD_EXPIRED = "pm_card_chargeDeclinedExpiredCard"
 CARD_INCORRECT_CVC = "pm_card_chargeDeclinedIncorrectCvc"
 CARD_PROCESSING_ERROR = "pm_card_chargeDeclinedProcessingError"
+CARD_AMEX_SUCCESS = "pm_card_amex"
+CARD_DISCOVER_SUCCESS = "pm_card_discover"
+
+# Additional decline test cards
+CARD_STOLEN = "pm_card_chargeDeclinedFraudulent"
+CARD_LOST = "pm_card_chargeDeclinedLostCard"
+CARD_RADAR_BLOCK = "pm_card_radarBlock"
+
+
+# ── Security injection payloads ──────────────────────────────────
+SQL_INJECTION_NAME = "'; DROP TABLE customers;--"
+XSS_PAYLOAD_NAME = "<script>alert('xss')</script>"
+PATH_TRAVERSAL_ID = "../../etc/passwd"
+NULL_BYTE_NAME = "test\x00name"
+HTML_ENTITY_DESCRIPTION = '&lt;b&gt;bold&lt;/b&gt; <img src=x onerror=alert(1)>'
+
+
+# ── Zero-decimal currency payloads ───────────────────────────────
+PAYMENT_INTENT_JPY = {
+    "amount": 500,
+    "currency": "jpy",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_WITH_DESCRIPTION = {
+    "amount": 2000,
+    "currency": "usd",
+    "description": "Test payment for order #12345",
+    "payment_method_types[]": "card",
+}
+
+PAYMENT_INTENT_WITH_METADATA = {
+    "amount": 3000,
+    "currency": "usd",
+    "payment_method_types[]": "card",
+    "metadata[order_id]": "ord_12345",
+    "metadata[source]": "automation",
+}

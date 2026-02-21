@@ -30,6 +30,16 @@ CUSTOMER_LIST_SCHEMA = {
     },
 }
 
+CUSTOMER_DELETE_SCHEMA = {
+    "type": "object",
+    "required": ["id", "object", "deleted"],
+    "properties": {
+        "id": {"type": "string", "pattern": "^cus_"},
+        "object": {"type": "string", "enum": ["customer"]},
+        "deleted": {"type": "boolean", "enum": [True]},
+    },
+}
+
 STRIPE_ERROR_SCHEMA = {
     "type": "object",
     "required": ["error"],

@@ -23,5 +23,14 @@ class PaymentIntentsAPI(BaseAPIClient):
     def capture(self, intent_id: str, **fields: Any) -> requests.Response:
         return self.post(f"{self.RESOURCE}/{intent_id}/capture", data=fields)
 
-    def cancel(self, intent_id: str) -> requests.Response:
-        return self.post(f"{self.RESOURCE}/{intent_id}/cancel")
+    def cancel(self, intent_id: str, **fields: Any) -> requests.Response:
+        return self.post(f"{self.RESOURCE}/{intent_id}/cancel", data=fields or None)
+
+    def list_intents(self, limit: int = 10, starting_after: str | None = None, **filters: Any) -> requests.Response:
+        params = {"limit": limit, **filters}
+        if starting_after:
+            params["starting_after"] = starting_after
+        return self.get(self.RESOURCE, params=params)
+
+    def update(self, intent_id: str, **fields: Any) -> requests.Response:
+        return self.post(f"{self.RESOURCE}/{intent_id}", data=fields)
