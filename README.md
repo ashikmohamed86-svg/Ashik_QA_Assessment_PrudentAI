@@ -35,9 +35,7 @@ Ashik_QA_Assessment_PrudentAI/
 │   ├── test_auth_headers.py           # Authentication enforcement & format variations
 │   └── test_rate_limit_resilience.py  # Concurrent requests, rapid-fire, multi-card
 ├── docs/
-│   ├── TEST_CASES.md                  # Detailed test-case documentation (236 tests)
-│   ├── DEMO_SCRIPT.md                 # Screen recording walkthrough script
-│   └── SLIDES_CONTENT.md             # Presentation slide content
+│   └── TEST_CASES.md                  # Detailed test-case documentation (236 tests)
 ├── .github/workflows/
 │   └── test.yml                       # GitHub Actions CI pipeline
 ├── conftest.py                        # Fixtures, cleanup, custom HTML report, xdist support
